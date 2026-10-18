@@ -9,8 +9,22 @@ function results = run_mil_tests()
 %                     message (also appended to the GitHub Actions job summary
 %                     when GITHUB_STEP_SUMMARY is set)
 %     plots/*.png     signal plots, one per test
-%   Throws an error when a test fails, so the CI job fails.
+%   Throws an error when a test fails, so the CI job fails. On GitHub Actions the
+%   totals and every failure are also published as job annotations, so they can
+%   be read through the GitHub API without downloading the log or the artifact.
 
+    try
+        results = runSuite();
+    catch err
+        if ~strcmp(err.identifier, 'run_mil_tests:failed')
+            annotate('error', 'MIL build failed', err.message);
+        end
+        rethrow(err);
+    end
+end
+
+% =====================================================================================
+function results = runSuite()
     root = inv_ctrl_setup();
     addpath(fullfile(root, 'tests'));
     resultsDir = fullfile(root, 'results');
@@ -39,6 +53,7 @@ function results = run_mil_tests()
     elapsed = toc(t0);
 
     writeSummary(suite, results, resultsDir, elapsed);
+    publishResults(results);
 
     bad = [results.Failed] | [results.Incomplete];
     if any(bad)
@@ -151,4 +166,28 @@ function s = mdCell(s)
     if numel(s) > 600
         s = [s(1:597) '...'];
     end
+end
+
+% =====================================================================================
+function publishResults(results)
+    bad = [results.Failed] | [results.Incomplete];
+    annotate('notice', 'MIL test results', sprintf('%d passed, %d failed of %d', ...
+        nnz([results.Passed]), nnz(bad), numel(results)));
+    idx = find(bad);
+    for i = idx(1:min(end, 9))
+        annotate('error', 'MIL test failed', [results(i).Name ' - ' firstFailure(results(i))]);
+    end
+end
+
+function annotate(level, title, msg)
+%ANNOTATE  Emit a GitHub Actions workflow command; does nothing outside GitHub Actions.
+    if ~strcmpi(getenv('GITHUB_ACTIONS'), 'true')
+        return
+    end
+    msg = strtrim(regexprep(char(msg), '\s+', ' '));
+    if numel(msg) > 300
+        msg = [msg(1:297) '...'];
+    end
+    msg = strrep(msg, '%', '%25');
+    fprintf('::%s title=%s::%s\n', level, title, msg);
 end
